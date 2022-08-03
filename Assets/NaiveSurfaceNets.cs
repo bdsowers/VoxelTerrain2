@@ -5,11 +5,13 @@ using UnityEngine.Profiling;
 
 public class NaiveSurfaceNets : MonoBehaviour
 {
-    private Vector3Int CELL_SIZE = new Vector3Int(64, 64, 64);
+    private const int CHUNK_SIZE = 64;
 
-    private float[] _voxelChunk = new float[64 * 64 * 64];
+    private Vector3Int CELL_SIZE = new Vector3Int(CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE);
 
-    float[] sdf = new float[64 * 64 * 64];
+    private float[] _voxelChunk = new float[CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE];
+
+    float[] sdf = new float[CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE];
     float[] cornerDists = new float[8];
     WorkingData workingData = new WorkingData();
 
@@ -308,23 +310,37 @@ public class NaiveSurfaceNets : MonoBehaviour
             {
                 workingData.Reset();
 
-                StartCoroutine(AnimateBlobGrow(hitInfo.point));
+                StartCoroutine(AnimateBlobGrow(hitInfo.point, 0));
+            }
+        }
+
+        if (Input.GetMouseButtonDown(1))
+        {
+            Ray ray = Camera.main.ScreenPointToRay(Input.mousePosition);
+            if (Physics.Raycast(ray, out RaycastHit hitInfo, float.MaxValue))
+            {
+                workingData.Reset();
+
+                StartCoroutine(AnimateBlobGrow(hitInfo.point, 1));
             }
         }
     }
 
-    private IEnumerator AnimateBlobGrow(Vector3 pos)
+    private IEnumerator AnimateBlobGrow(Vector3 pos, int shape)
     {
         Vector3Int posInt = new Vector3Int(Mathf.CeilToInt(pos.x), Mathf.CeilToInt(pos.y), Mathf.CeilToInt(pos.z));
         for (float i = 1.0f; i <= 5f; i += 0.2f)
         {
             Profiler.BeginSample("AnimateBlobGrow");
 
-            //RenderSphereIntoChunk(posInt, i, sdf);
-            RenderCubeIntoChunk(posInt, Vector3.one * i, sdf);
+            if (shape == 0)
+                RenderSphereIntoChunk(posInt, i, sdf);
+            else
+                RenderCubeIntoChunk(posInt, Vector3.one * i, sdf);
+
             workingData.Reset();
-            EstimateSurface(sdf, new Vector3Int(1, 1, 1), new Vector3Int(62, 62, 62), workingData);
-            MakeAllQuads(sdf, new Vector3Int(1, 1, 1), new Vector3Int(62, 62, 62), workingData);
+            EstimateSurface(sdf, new Vector3Int(1, 1, 1), new Vector3Int(CHUNK_SIZE - 2, CHUNK_SIZE - 2, CHUNK_SIZE - 2), workingData);
+            MakeAllQuads(sdf, new Vector3Int(1, 1, 1), new Vector3Int(CHUNK_SIZE - 2, CHUNK_SIZE - 2, CHUNK_SIZE - 2), workingData);
             GenerateMesh(workingData);
 
             Profiler.EndSample();
@@ -385,7 +401,7 @@ public class NaiveSurfaceNets : MonoBehaviour
 
     private void Start()
     {
-        for (int i = 0; i < 64 * 64 * 64; ++i)
+        for (int i = 0; i < CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE; ++i)
         {
             sdf[i] = 10;
         }
@@ -395,8 +411,8 @@ public class NaiveSurfaceNets : MonoBehaviour
 
         workingData.Reset();
 
-        EstimateSurface(sdf, new Vector3Int(1, 1, 1), new Vector3Int(62, 62, 62), workingData);
-        MakeAllQuads(sdf, new Vector3Int(1, 1, 1), new Vector3Int(62, 62, 62), workingData);
+        EstimateSurface(sdf, new Vector3Int(1, 1, 1), new Vector3Int(CHUNK_SIZE - 2, CHUNK_SIZE - 2, CHUNK_SIZE - 2), workingData);
+        MakeAllQuads(sdf, new Vector3Int(1, 1, 1), new Vector3Int(CHUNK_SIZE - 2, CHUNK_SIZE - 2, CHUNK_SIZE - 2), workingData);
         GenerateMesh(workingData);
     }
 
@@ -411,7 +427,7 @@ public class NaiveSurfaceNets : MonoBehaviour
 
         public WorkingData()
         {
-            for (int i = 0; i < 64 * 64 * 64; ++i)
+            for (int i = 0; i < CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE; ++i)
             {
                 strideToIndex.Add(-1);
             }
@@ -425,7 +441,7 @@ public class NaiveSurfaceNets : MonoBehaviour
             surfacePoints.Clear();
             surfaceStrides.Clear();
 
-            for (int i = 0; i < 64 * 64 * 64; ++i)
+            for (int i = 0; i < CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE; ++i)
             {
                 strideToIndex[i] = -1;
             }
