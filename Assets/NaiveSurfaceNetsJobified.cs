@@ -2,162 +2,220 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Profiling;
+using Unity.Jobs;
+using Unity.Burst;
+using Unity.Collections;
 
-public class NaiveSurfaceNets : MonoBehaviour
+public class NaiveSurfaceNetsJobified : MonoBehaviour
 {
-    private const int CHUNK_SIZE = 64;
-
-    private Vector3Int CELL_SIZE = new Vector3Int(CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE);
-
-    float[] sdf = new float[CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE];
-    float[] cornerDists = new float[8];
-    WorkingData workingData = new WorkingData();
-
-    private int Linearize(Vector3Int point)
+    private class NaiveSurfaceNetsJob : IJob
     {
-        return point.x + point.y * CELL_SIZE.x + point.z * CELL_SIZE.x * CELL_SIZE.y;
-    }
+        [ReadOnly] public NativeArray<float> sdf;
+        [WriteOnly] public NativeArray<Vector3> positions;
+        [WriteOnly] public NativeArray<Vector3> normals;
+        [WriteOnly] public NativeArray<int> indices;
+        [WriteOnly] public NativeArray<Vector3Int> surfacePoints;
+        [WriteOnly] public NativeArray<int> surfaceStrides;
+        [WriteOnly] public NativeArray<int> strideToIndex;
 
-    private int Linearize(int x, int y, int z)
-    {
-        return x + y * CELL_SIZE.y + z * CELL_SIZE.x * CELL_SIZE.y;
-    }
+        public Vector3Int min, max;
 
-    private void EstimateSurface(float[] sdf, Vector3Int min, Vector3Int max, WorkingData workingData)
-    {
-        Profiler.BeginSample("EstimateSurface");
+        private const int CHUNK_SIZE = 64;
 
-        for (int z = min.z; z <= max.z; ++z)
+        private Vector3Int CELL_SIZE = new Vector3Int(CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE);
+
+        private float[] cornerDists = new float[8];
+
+        private List<Vector3Int> CUBE_CORNERS = new List<Vector3Int>()
         {
-            for (int y = min.y; y <= max.y; ++y)
+            new Vector3Int(0, 0, 0),
+            new Vector3Int(1, 0, 0),
+            new Vector3Int(0, 1, 0),
+            new Vector3Int(1, 1, 0),
+            new Vector3Int(0, 0, 1),
+            new Vector3Int(1, 0, 1),
+            new Vector3Int(0, 1, 1),
+            new Vector3Int(1, 1, 1),
+        };
+
+        private List<Vector2Int> CUBE_EDGES = new List<Vector2Int>()
+        {
+            new Vector2Int(0b000, 0b001),
+            new Vector2Int(0b000, 0b010),
+            new Vector2Int(0b000, 0b100),
+            new Vector2Int(0b001, 0b011),
+            new Vector2Int(0b001, 0b101),
+            new Vector2Int(0b010, 0b011),
+            new Vector2Int(0b010, 0b110),
+            new Vector2Int(0b011, 0b111),
+            new Vector2Int(0b100, 0b101),
+            new Vector2Int(0b100, 0b110),
+            new Vector2Int(0b101, 0b111),
+            new Vector2Int(0b110, 0b111),
+        };
+
+        private List<Vector3> CUBE_CORNER_VECTORS = new List<Vector3>()
+        {
+            new Vector3(0.0f, 0.0f, 0.0f),
+            new Vector3(1.0f, 0.0f, 0.0f),
+            new Vector3(0.0f, 1.0f, 0.0f),
+            new Vector3(1.0f, 1.0f, 0.0f),
+            new Vector3(0.0f, 0.0f, 1.0f),
+            new Vector3(1.0f, 0.0f, 1.0f),
+            new Vector3(0.0f, 1.0f, 1.0f),
+            new Vector3(1.0f, 1.0f, 1.0f),
+        };
+
+        public void Execute()
+        {
+            int index = 0;
+            int numPositions = 0;
+
+            for (int z = min.z; z <= max.z; ++z)
             {
-                for (int x = min.x; x <= max.x; ++x)
+                for (int y = min.y; y <= max.y; ++y)
                 {
-                    int stride = Linearize(x, y, z);
-                    Vector3 p = new Vector3(x, y, z);
-                    if (EstimateSurfaceInCube(sdf, p, stride, workingData))
+                    for (int x = min.x; x <= max.x; ++x)
                     {
-                        workingData.strideToIndex[stride] = workingData.positions.Count - 1;
-                        workingData.surfacePoints.Add(new Vector3Int(x, y, z));
-                        workingData.surfaceStrides.Add(stride);
-                    }
-                    else
-                    {
-                        workingData.strideToIndex[stride] = -1;
+                        int stride = Linearize(x, y, z);
+                        Vector3 p = new Vector3(x, y, z);
+                        numPositions = EstimateSurfaceInCube(p, stride, numPositions);
+                        if (numPositions != -1)
+                        {
+                            strideToIndex[stride] = numPositions - 1;
+                            surfacePoints[index] = new Vector3Int(x, y, z);
+                            surfaceStrides[index] = stride;
+                            ++index;
+                        }
+                        else
+                        {
+                            strideToIndex[stride] = -1;
+                        }
                     }
                 }
             }
         }
 
-        Profiler.EndSample();
-    }
-
-    private bool EstimateSurfaceInCube(float[] sdf, Vector3 p, int minCornerStride, WorkingData workingData)
-    {
-        Profiler.BeginSample("EstimateSurfaceInCube");
-
-        int numNegatives = 0;
-
-        for (int i = 0; i < 8; ++i)
+        private int EstimateSurfaceInCube(Vector3 p, int minCornerStride, int numPositions)
         {
-            int stride = minCornerStride + Linearize(CUBE_CORNERS[i]);
-            if (stride < 0 || stride >= sdf.Length)
+            Profiler.BeginSample("EstimateSurfaceInCube");
+
+            int numNegatives = 0;
+
+            for (int i = 0; i < 8; ++i)
             {
-                continue;
+                int stride = minCornerStride + Linearize(CUBE_CORNERS[i]);
+                if (stride < 0 || stride >= sdf.Length)
+                {
+                    continue;
+                }
+
+                float d = sdf[stride];
+                cornerDists[i] = d;
+                if (d < 0f)
+                {
+                    numNegatives++;
+                }
             }
 
-            float d = sdf[stride];
-            cornerDists[i] = d;
-            if (d < 0f)
+            if (numNegatives == 0 || numNegatives == 8)
             {
-                numNegatives++;
+                Profiler.EndSample();
+                return -1;
             }
-        }
 
-        if (numNegatives == 0 || numNegatives == 8)
-        {
+            Vector3 c = CentroidOfEdgeIntersection(cornerDists);
+            positions[numPositions] = (p + c);
+            normals[numPositions] = SDFGradient(cornerDists, c);
+            ++numPositions;
+
             Profiler.EndSample();
-            return false;
+            return numPositions;
         }
 
-        Vector3 c = CentroidOfEdgeIntersection(cornerDists);
-        workingData.positions.Add(p + c);
-        workingData.normals.Add(SDFGradient(cornerDists, c));
-
-        Profiler.EndSample();
-        return true;
-    }
-
-    Vector3 CentroidOfEdgeIntersection(float[] cornerDists)
-    {
-        int count = 0;
-        Vector3 sum = Vector3.zero;
-
-        foreach(Vector2Int corner in CUBE_EDGES)
+        Vector3 CentroidOfEdgeIntersection(float[] cornerDists)
         {
-            float d1 = cornerDists[corner.x];
-            float d2 = cornerDists[corner.y];
-            if (!Mathf.Approximately(Mathf.Sign(d1), Mathf.Sign(d2)))
+            int count = 0;
+            Vector3 sum = Vector3.zero;
+
+            foreach (Vector2Int corner in CUBE_EDGES)
             {
-                count++;
-                sum += EstimateSurfaceEdgeIntersection(corner.x, corner.y, d1, d2);
+                float d1 = cornerDists[corner.x];
+                float d2 = cornerDists[corner.y];
+                if (!Mathf.Approximately(Mathf.Sign(d1), Mathf.Sign(d2)))
+                {
+                    count++;
+                    sum += EstimateSurfaceEdgeIntersection(corner.x, corner.y, d1, d2);
+                }
             }
+
+            return sum / count;
         }
 
-        return sum / count;
+        Vector3 EstimateSurfaceEdgeIntersection(int corner1, int corner2, float value1, float value2)
+        {
+            float interp = value1 / (value1 - value2);
+            return (1 - interp) * CUBE_CORNER_VECTORS[corner1] + interp * CUBE_CORNER_VECTORS[corner2];
+        }
+
+        public Vector3 SDFGradient(float[] dists, Vector3 s)
+        {
+            Vector3 p00 = new Vector3(dists[0b001], dists[0b010], dists[0b100]);
+            Vector3 n00 = new Vector3(dists[0b000], dists[0b000], dists[0b000]);
+
+            Vector3 p10 = new Vector3(dists[0b101], dists[0b011], dists[0b110]);
+            Vector3 n10 = new Vector3(dists[0b100], dists[0b001], dists[0b010]);
+
+            Vector3 p01 = new Vector3(dists[0b011], dists[0b110], dists[0b101]);
+            Vector3 n01 = new Vector3(dists[0b010], dists[0b100], dists[0b001]);
+
+            Vector3 p11 = new Vector3(dists[0b111], dists[0b111], dists[0b111]);
+            Vector3 n11 = new Vector3(dists[0b110], dists[0b101], dists[0b011]);
+
+            // Each dimension encodes an edge delta, giving 12 in total.
+            Vector3 d00 = p00 - n00; // Edges (0b00x, 0b0y0, 0bz00)
+            Vector3 d10 = p10 - n10; // Edges (0b10x, 0b0y1, 0bz10)
+            Vector3 d01 = p01 - n01; // Edges (0b01x, 0b1y0, 0bz01)
+            Vector3 d11 = p11 - n11; // Edges (0b11x, 0b1y1, 0bz11)
+
+            Vector3 neg = Vector3.one - s;
+
+            // Do bilinear interpolation between 4 edges in each dimension.
+            Vector3 result = ElementMul(YZX(neg), ZXY(neg), d00)
+                + ElementMul(YZX(neg), ZXY(s), d10)
+                + ElementMul(YZX(s), ZXY(neg), d01)
+                + ElementMul(YZX(s), ZXY(s), d11);
+            return result.normalized;
+        }
+
+        private Vector3 ElementMul(Vector3 v1, Vector3 v2, Vector3 v3)
+        {
+            return new Vector3(v1.x * v2.x * v3.x, v1.y * v2.y * v3.y, v1.z * v2.z * v3.z);
+        }
+
+        private Vector3 YZX(Vector3 vec)
+        {
+            return new Vector3(vec.y, vec.z, vec.x);
+        }
+
+        private Vector3 ZXY(Vector3 vec)
+        {
+            return new Vector3(vec.z, vec.x, vec.y);
+        }
+
+        private int Linearize(Vector3Int point)
+        {
+            return point.x + point.y * CELL_SIZE.x + point.z * CELL_SIZE.x * CELL_SIZE.y;
+        }
+
+        private int Linearize(int x, int y, int z)
+        {
+            return x + y * CELL_SIZE.y + z * CELL_SIZE.x * CELL_SIZE.y;
+        }
     }
 
-    Vector3 EstimateSurfaceEdgeIntersection(int corner1, int corner2, float value1, float value2)
-    {
-        float interp = value1 / (value1 - value2);
-        return (1 - interp) * CUBE_CORNER_VECTORS[corner1] + interp * CUBE_CORNER_VECTORS[corner2];
-    }
-
-    public Vector3 SDFGradient(float[] dists, Vector3 s)
-    {
-        Vector3 p00 = new Vector3(dists[0b001], dists[0b010], dists[0b100]);
-        Vector3 n00 = new Vector3(dists[0b000], dists[0b000], dists[0b000]);
-
-        Vector3 p10 = new Vector3(dists[0b101], dists[0b011], dists[0b110]);
-        Vector3 n10 = new Vector3(dists[0b100], dists[0b001], dists[0b010]);
-
-        Vector3 p01 = new Vector3(dists[0b011], dists[0b110], dists[0b101]);
-        Vector3 n01 = new Vector3(dists[0b010], dists[0b100], dists[0b001]);
-
-        Vector3 p11 = new Vector3(dists[0b111], dists[0b111], dists[0b111]);
-        Vector3 n11 = new Vector3(dists[0b110], dists[0b101], dists[0b011]);
-
-        // Each dimension encodes an edge delta, giving 12 in total.
-        Vector3 d00 = p00 - n00; // Edges (0b00x, 0b0y0, 0bz00)
-        Vector3 d10 = p10 - n10; // Edges (0b10x, 0b0y1, 0bz10)
-        Vector3 d01 = p01 - n01; // Edges (0b01x, 0b1y0, 0bz01)
-        Vector3 d11 = p11 - n11; // Edges (0b11x, 0b1y1, 0bz11)
-
-        Vector3 neg = Vector3.one - s;
-
-        // Do bilinear interpolation between 4 edges in each dimension.
-        Vector3 result = ElementMul(YZX(neg), ZXY(neg), d00)
-            + ElementMul(YZX(neg), ZXY(s), d10)
-            + ElementMul(YZX(s), ZXY(neg), d01)
-            + ElementMul(YZX(s), ZXY(s), d11);
-        return result.normalized;
-    }
-
-    private Vector3 ElementMul(Vector3 v1, Vector3 v2, Vector3 v3)
-    {
-        return new Vector3(v1.x * v2.x * v3.x, v1.y * v2.y * v3.y, v1.z * v2.z * v3.z);
-    }
-
-    private Vector3 YZX(Vector3 vec)
-    {
-        return new Vector3(vec.y, vec.z, vec.x);
-    }
-
-    private Vector3 ZXY(Vector3 vec)
-    {
-        return new Vector3(vec.z, vec.x, vec.y);
-    }
-
+    
+    /*
     private void MakeAllQuads(float[] sdf, Vector3Int min, Vector3Int max, WorkingData workingData)
     {
         Profiler.BeginSample("MakeAllQuads");
@@ -444,45 +502,5 @@ public class NaiveSurfaceNets : MonoBehaviour
                 strideToIndex[i] = -1;
             }
         }
-    }
-
-    private List<Vector3Int> CUBE_CORNERS = new List<Vector3Int>()
-    {
-        new Vector3Int(0, 0, 0),
-        new Vector3Int(1, 0, 0),
-        new Vector3Int(0, 1, 0),
-        new Vector3Int(1, 1, 0),
-        new Vector3Int(0, 0, 1),
-        new Vector3Int(1, 0, 1),
-        new Vector3Int(0, 1, 1),
-        new Vector3Int(1, 1, 1),
-    };
-
-    private List<Vector2Int> CUBE_EDGES = new List<Vector2Int>()
-    {
-        new Vector2Int(0b000, 0b001),
-        new Vector2Int(0b000, 0b010),
-        new Vector2Int(0b000, 0b100),
-        new Vector2Int(0b001, 0b011),
-        new Vector2Int(0b001, 0b101),
-        new Vector2Int(0b010, 0b011),
-        new Vector2Int(0b010, 0b110),
-        new Vector2Int(0b011, 0b111),
-        new Vector2Int(0b100, 0b101),
-        new Vector2Int(0b100, 0b110),
-        new Vector2Int(0b101, 0b111),
-        new Vector2Int(0b110, 0b111),
-    };
-
-    private List<Vector3> CUBE_CORNER_VECTORS = new List<Vector3>()
-    {
-        new Vector3(0.0f, 0.0f, 0.0f),
-        new Vector3(1.0f, 0.0f, 0.0f),
-        new Vector3(0.0f, 1.0f, 0.0f),
-        new Vector3(1.0f, 1.0f, 0.0f),
-        new Vector3(0.0f, 0.0f, 1.0f),
-        new Vector3(1.0f, 0.0f, 1.0f),
-        new Vector3(0.0f, 1.0f, 1.0f),
-        new Vector3(1.0f, 1.0f, 1.0f),
-    };
+    }*/
 }
