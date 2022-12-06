@@ -2,20 +2,29 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Profiling;
+using Unity.Mathematics;
 
 public class NaiveSurfaceNets : MonoBehaviour
 {
-    private const int CHUNK_SIZE = 64;
+    
+    private const int CHUNK_SIZE = 128;
 
     private Vector3Int CELL_SIZE = new Vector3Int(CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE);
+    private const int CHUNK_DATA_LENGTH = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE;
 
     float[] sdf = new float[CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE];
+
+    private bool anythingDirty = false;
+    bool[] dirty = new bool[CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE];
+    bool[] cachedOnSurface = new bool[CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE];
+    
     float[] cornerDists = new float[8];
     WorkingData workingData = new WorkingData();
 
     private int Linearize(Vector3Int point)
     {
-        return point.x + point.y * CELL_SIZE.x + point.z * CELL_SIZE.x * CELL_SIZE.y;
+        int result =  point.x + point.y * CELL_SIZE.x + point.z * CELL_SIZE.x * CELL_SIZE.y;
+        return result;
     }
 
     private int Linearize(int x, int y, int z)
@@ -25,42 +34,44 @@ public class NaiveSurfaceNets : MonoBehaviour
 
     private void EstimateSurface(float[] sdf, Vector3Int min, Vector3Int max, WorkingData workingData)
     {
-        Profiler.BeginSample("EstimateSurface");
-
         for (int z = min.z; z <= max.z; ++z)
         {
             for (int y = min.y; y <= max.y; ++y)
             {
                 for (int x = min.x; x <= max.x; ++x)
                 {
-                    int stride = Linearize(x, y, z);
+                    int stride = x + y * CELL_SIZE.x + z * CELL_SIZE.x * CELL_SIZE.y;
                     Vector3 p = new Vector3(x, y, z);
-                    if (EstimateSurfaceInCube(sdf, p, stride, workingData))
+
+                    if (dirty[stride])
+                    {
+                        cachedOnSurface[stride] = EstimateSurfaceInCube(sdf, p, stride, workingData);
+                        dirty[stride] = false;
+                    }
+                    else if (cachedOnSurface[stride])
+                    {
+                        // TODO : We could potentially optimize this away with more caching?
+                        cachedOnSurface[stride] = EstimateSurfaceInCube(sdf, p, stride, workingData);
+                    }
+
+                    if (cachedOnSurface[stride])
                     {
                         workingData.strideToIndex[stride] = workingData.positions.Count - 1;
                         workingData.surfacePoints.Add(new Vector3Int(x, y, z));
                         workingData.surfaceStrides.Add(stride);
                     }
-                    else
-                    {
-                        workingData.strideToIndex[stride] = -1;
-                    }
                 }
             }
         }
-
-        Profiler.EndSample();
     }
 
     private bool EstimateSurfaceInCube(float[] sdf, Vector3 p, int minCornerStride, WorkingData workingData)
     {
-        Profiler.BeginSample("EstimateSurfaceInCube");
-
         int numNegatives = 0;
 
         for (int i = 0; i < 8; ++i)
         {
-            int stride = minCornerStride + Linearize(CUBE_CORNERS[i]);
+            int stride = minCornerStride + LINEARIZED_CUBE_CORNERS[i];
             if (stride < 0 || stride >= sdf.Length)
             {
                 continue;
@@ -73,18 +84,15 @@ public class NaiveSurfaceNets : MonoBehaviour
                 numNegatives++;
             }
         }
-
+        
         if (numNegatives == 0 || numNegatives == 8)
         {
-            Profiler.EndSample();
             return false;
         }
 
         Vector3 c = CentroidOfEdgeIntersection(cornerDists);
         workingData.positions.Add(p + c);
         workingData.normals.Add(SDFGradient(cornerDists, c));
-
-        Profiler.EndSample();
         return true;
     }
 
@@ -140,6 +148,7 @@ public class NaiveSurfaceNets : MonoBehaviour
             + ElementMul(YZX(neg), ZXY(s), d10)
             + ElementMul(YZX(s), ZXY(neg), d01)
             + ElementMul(YZX(s), ZXY(s), d11);
+
         return result.normalized;
     }
 
@@ -160,15 +169,6 @@ public class NaiveSurfaceNets : MonoBehaviour
 
     private void MakeAllQuads(float[] sdf, Vector3Int min, Vector3Int max, WorkingData workingData)
     {
-        Profiler.BeginSample("MakeAllQuads");
-
-        int[] xyzStrides = new int[]
-        {
-            Linearize(1, 0, 0),
-            Linearize(0, 1, 0),
-            Linearize(0, 0, 1),
-        };
-
         for (int i = 0; i < workingData.surfacePoints.Count; ++i)
         {
             Vector3Int surfacePoint = workingData.surfacePoints[i];
@@ -180,9 +180,9 @@ public class NaiveSurfaceNets : MonoBehaviour
                     workingData.strideToIndex, 
                     workingData.positions, 
                     p_stride, 
-                    p_stride + xyzStrides[0], 
-                    xyzStrides[1], 
-                    xyzStrides[2], 
+                    p_stride + LINEARIZED_XYZ_STRIDES[0],
+                    LINEARIZED_XYZ_STRIDES[1],
+                    LINEARIZED_XYZ_STRIDES[2], 
                     workingData.indices);
             }
 
@@ -192,9 +192,9 @@ public class NaiveSurfaceNets : MonoBehaviour
                     workingData.strideToIndex,
                     workingData.positions,
                     p_stride,
-                    p_stride + xyzStrides[1],
-                    xyzStrides[2],
-                    xyzStrides[0],
+                    p_stride + LINEARIZED_XYZ_STRIDES[1],
+                    LINEARIZED_XYZ_STRIDES[2],
+                    LINEARIZED_XYZ_STRIDES[0],
                     workingData.indices);
             }
 
@@ -204,20 +204,16 @@ public class NaiveSurfaceNets : MonoBehaviour
                     workingData.strideToIndex,
                     workingData.positions,
                     p_stride,
-                    p_stride + xyzStrides[2],
-                    xyzStrides[0],
-                    xyzStrides[1],
+                    p_stride + LINEARIZED_XYZ_STRIDES[2],
+                    LINEARIZED_XYZ_STRIDES[0],
+                    LINEARIZED_XYZ_STRIDES[1],
                     workingData.indices);
             }
         }
-
-        Profiler.EndSample();
     }
 
-    private void MaybeMakeQuad(float[] sdf, List<int> strideToIndex, List<Vector3> positions, int p1, int p2, int axis_b_stride, int axis_c_stride, List<int> indices)
+    private void MaybeMakeQuad(float[] sdf, int[] strideToIndex, List<Vector3> positions, int p1, int p2, int axis_b_stride, int axis_c_stride, List<int> indices)
     {
-        Profiler.BeginSample("MaybeMakeQuad");
-
         float d1 = sdf[p1];
         float d2 = sdf[p2];
 
@@ -278,14 +274,10 @@ public class NaiveSurfaceNets : MonoBehaviour
             indices.Add(v3);
             indices.Add(v1);
         }
-
-        Profiler.EndSample();
     }
 
     private void GenerateMesh(WorkingData workingData)
     {
-        Profiler.BeginSample("GenerateMesh");
-
         Mesh mesh = new Mesh();
         mesh.vertices = workingData.positions.ToArray();
         mesh.SetIndices(workingData.indices.ToArray(), MeshTopology.Triangles, 0);
@@ -295,8 +287,6 @@ public class NaiveSurfaceNets : MonoBehaviour
 
         GetComponent<MeshFilter>().mesh = mesh;
         GetComponent<MeshCollider>().sharedMesh = mesh;
-
-        Profiler.EndSample();
     }
 
     private void Update()
@@ -322,6 +312,19 @@ public class NaiveSurfaceNets : MonoBehaviour
                 StartCoroutine(AnimateBlobGrow(hitInfo.point, 1));
             }
         }
+
+        if (anythingDirty)
+        {
+            Profiler.BeginSample("MakeAllQuads");
+            MakeAllQuads(sdf, new Vector3Int(1, 1, 1), new Vector3Int(CHUNK_SIZE - 2, CHUNK_SIZE - 2, CHUNK_SIZE - 2), workingData);
+            Profiler.EndSample();
+
+            Profiler.BeginSample("GenerateMesh");
+            GenerateMesh(workingData);
+            Profiler.EndSample();
+
+            anythingDirty = false;
+        }
     }
 
     private IEnumerator AnimateBlobGrow(Vector3 pos, int shape)
@@ -329,18 +332,21 @@ public class NaiveSurfaceNets : MonoBehaviour
         Vector3Int posInt = new Vector3Int(Mathf.CeilToInt(pos.x), Mathf.CeilToInt(pos.y), Mathf.CeilToInt(pos.z));
         for (float i = 1.0f; i <= 5f; i += 0.2f)
         {
-            Profiler.BeginSample("AnimateBlobGrow");
+            Profiler.BeginSample("RenderIntoChunk");
 
             if (shape == 0)
-                RenderSphereIntoChunk(posInt, i, sdf);
+                RenderSphereIntoChunk(posInt, i, sdf, false);
             else
-                RenderCubeIntoChunk(posInt, Vector3.one * i, sdf);
+                RenderSphereIntoChunk(posInt, i, sdf, true);
 
+            Profiler.EndSample();
+
+            Profiler.BeginSample("WorkingData Reset");
             workingData.Reset();
-            EstimateSurface(sdf, new Vector3Int(1, 1, 1), new Vector3Int(CHUNK_SIZE - 2, CHUNK_SIZE - 2, CHUNK_SIZE - 2), workingData);
-            MakeAllQuads(sdf, new Vector3Int(1, 1, 1), new Vector3Int(CHUNK_SIZE - 2, CHUNK_SIZE - 2, CHUNK_SIZE - 2), workingData);
-            GenerateMesh(workingData);
+            Profiler.EndSample();
 
+            Profiler.BeginSample("EstimateSurface");
+            EstimateSurface(sdf, new Vector3Int(1, 1, 1), new Vector3Int(CHUNK_SIZE - 2, CHUNK_SIZE - 2, CHUNK_SIZE - 2), workingData);
             Profiler.EndSample();
 
             yield return null;
@@ -349,63 +355,105 @@ public class NaiveSurfaceNets : MonoBehaviour
 
     void RenderCubeIntoChunk(Vector3Int center, Vector3 size, float[] sdf)
     {
-        Profiler.BeginSample("RenderCubeIntoChunk");
+        Vector3 min = center - size / 1.5f;
+        Vector3 max = center + size / 1.5f;
+        Vector3Int minInt = new Vector3Int(Mathf.FloorToInt(min.x), Mathf.FloorToInt(min.y), Mathf.FloorToInt(min.z));
+        Vector3Int maxInt = new Vector3Int(Mathf.CeilToInt(max.x), Mathf.CeilToInt(max.y), Mathf.CeilToInt(max.z));
 
-        for (int x = 1; x < CELL_SIZE.x - 1; x++)
+        minInt.x = Mathf.Max(minInt.x, 1);
+        minInt.y = Mathf.Max(minInt.y, 1);
+        minInt.z = Mathf.Max(minInt.z, 1);
+
+        maxInt.x = Mathf.Min(maxInt.x, CELL_SIZE.x - 1);
+        maxInt.y = Mathf.Min(maxInt.y, CELL_SIZE.y - 1);
+        maxInt.z = Mathf.Min(maxInt.z, CELL_SIZE.z - 1);
+
+        for (int x = minInt.x; x < maxInt.x; x++)
         {
-            for (int y = 1; y < CELL_SIZE.y - 1; y++)
+            for (int y = minInt.y; y < maxInt.y; y++)
             {
-                for (int z = 1; z < CELL_SIZE.z - 1; z++)
+                for (int z = minInt.z; z < maxInt.z; z++)
                 {
-
                     Vector3 pos = new Vector3(x, y, z);
                     float val = (pos.x > center.x - size.x / 2 && pos.x < center.x + size.x / 2 &&
                                 pos.y > center.y - size.y / 2 && pos.y < center.y + size.y / 2 &&
                                 pos.z > center.z - size.z / 2 && pos.z < center.z + size.z / 2) ? -10f : 10f;
 
-                    int lin = Linearize(x, y, z);
+                    int lin = x + y * CELL_SIZE.x + z * CELL_SIZE.x * CELL_SIZE.y;
                     float curr = sdf[lin];
                     sdf[lin] = Mathf.Min(curr, val);
+                    dirty[lin] = true;
                 }
             }
         }
 
-        Profiler.EndSample();
+        anythingDirty = true;
     }
 
-    void RenderSphereIntoChunk(Vector3Int center, float radius, float[] sdf)
+    void RenderSphereIntoChunk(Vector3Int center, float radius, float[] sdf, bool subtract)
     {
-        Profiler.BeginSample("RenderSphereIntoChunk");
+        Vector3 min = center - Vector3.one * (radius + 1);
+        Vector3 max = center + Vector3.one * (radius + 1);
+        Vector3Int minInt = new Vector3Int(Mathf.FloorToInt(min.x), Mathf.FloorToInt(min.y), Mathf.FloorToInt(min.z));
+        Vector3Int maxInt = new Vector3Int(Mathf.CeilToInt(max.x), Mathf.CeilToInt(max.y), Mathf.CeilToInt(max.z));
 
-        for (int x = 1; x < CELL_SIZE.x - 1; x++)
+        minInt.x = Mathf.Max(minInt.x, 1);
+        minInt.y = Mathf.Max(minInt.y, 1);
+        minInt.z = Mathf.Max(minInt.z, 1);
+
+        maxInt.x = Mathf.Min(maxInt.x, CELL_SIZE.x - 1);
+        maxInt.y = Mathf.Min(maxInt.y, CELL_SIZE.y - 1);
+        maxInt.z = Mathf.Min(maxInt.z, CELL_SIZE.z - 1);
+
+        for (int x = minInt.x; x < maxInt.x; x++)
         {
-            for (int y = 1; y < CELL_SIZE.y - 1; y++)
+            for (int y = minInt.y; y < maxInt.y; y++)
             {
-                for (int z = 1; z < CELL_SIZE.z - 1; z++)
+                for (int z = minInt.z; z < maxInt.z; z++)
                 {
-
                     Vector3 pos = new Vector3(x, y, z);
                     float val = Vector3.Distance(pos, center) - radius;
 
                     int lin = Linearize(x, y, z);
                     float curr = sdf[lin];
-                    sdf[lin] = Mathf.Min(curr, val);
+                    
+                    if (subtract)
+                        sdf[lin] = Mathf.Max(-val, curr);
+                    else
+                        sdf[lin] = Mathf.Min(curr, val);
+
+                    dirty[lin] = true;
                 }
             }
         }
 
-        Profiler.EndSample();
+        anythingDirty = true;
     }
 
     private void Start()
     {
+        anythingDirty = true;
+
         for (int i = 0; i < CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE; ++i)
         {
             sdf[i] = 10;
+            dirty[i] = true;
         }
 
-        RenderSphereIntoChunk(new Vector3Int(25, 25, 25), 10f, sdf);
-        RenderSphereIntoChunk(new Vector3Int(35, 25, 25), 10f, sdf);
+        for (int i = 0; i < CUBE_CORNERS.Count; ++i)
+        {
+            LINEARIZED_CUBE_CORNERS[i] = Linearize(CUBE_CORNERS[i]);
+        }
+
+        LINEARIZED_XYZ_STRIDES = new int[]
+        {
+            Linearize(1, 0, 0),
+            Linearize(0, 1, 0),
+            Linearize(0, 0, 1),
+        };
+
+        RenderSphereIntoChunk(new Vector3Int(25, 25, 25), 10f, sdf, false);
+        RenderSphereIntoChunk(new Vector3Int(35, 25, 25), 10f, sdf, false);
 
         workingData.Reset();
 
@@ -421,28 +469,35 @@ public class NaiveSurfaceNets : MonoBehaviour
         public List<int> indices = new List<int>();
         public List<Vector3Int> surfacePoints = new List<Vector3Int>();
         public List<int> surfaceStrides = new List<int>();
-        public List<int> strideToIndex = new List<int>();
+        public int[] strideToIndex = null;
 
         public WorkingData()
         {
-            for (int i = 0; i < CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE; ++i)
+            strideToIndex = new int[CHUNK_DATA_LENGTH];
+
+            for (int i = 0; i < CHUNK_DATA_LENGTH; ++i)
             {
-                strideToIndex.Add(-1);
+                strideToIndex[i] = -1;
             }
         }
 
         public void Reset()
         {
+            Profiler.BeginSample("Clearing Lists");
             positions.Clear();
             normals.Clear();
             indices.Clear();
             surfacePoints.Clear();
             surfaceStrides.Clear();
+            Profiler.EndSample();
 
-            for (int i = 0; i < CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE; ++i)
+            Profiler.BeginSample("Resetting StrideToIndex");
+            // Doesn't seem like we really need to do this... only "actual" values really get considered.
+            /*for (int i = 0; i < CHUNK_DATA_LENGTH; ++i)
             {
                 strideToIndex[i] = -1;
-            }
+            }*/
+            Profiler.EndSample();
         }
     }
 
@@ -457,6 +512,9 @@ public class NaiveSurfaceNets : MonoBehaviour
         new Vector3Int(0, 1, 1),
         new Vector3Int(1, 1, 1),
     };
+
+    private int[] LINEARIZED_CUBE_CORNERS = new int[8];
+    private int[] LINEARIZED_XYZ_STRIDES = new int[3];
 
     private List<Vector2Int> CUBE_EDGES = new List<Vector2Int>()
     {
