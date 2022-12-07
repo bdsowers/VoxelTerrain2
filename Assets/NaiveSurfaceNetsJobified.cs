@@ -17,7 +17,7 @@ public class NaiveSurfaceNetsJobified : MonoBehaviour
     private NativeArray<float> sdf;
     private NativeArray<Vector3> positions;
     private NativeArray<Vector3> normals;
-    private List<int> indices;
+    private NativeArray<int> indices;
     private NativeArray<Vector3Int> surfacePoints;
     private NativeArray<int> surfaceStrides;
     private NativeArray<int> strideToIndex;
@@ -87,7 +87,7 @@ public class NaiveSurfaceNetsJobified : MonoBehaviour
         normals = new NativeArray<Vector3>(CHUNK_DATA_LENGTH, Allocator.Persistent);
         dirty = new NativeArray<bool>(CHUNK_DATA_LENGTH, Allocator.Persistent);
         cachedOnSurface = new NativeArray<bool>(CHUNK_DATA_LENGTH, Allocator.Persistent);
-        indices = new List<int>();
+        indices = new NativeArray<int>(CHUNK_DATA_LENGTH, Allocator.Persistent);
         surfacePoints = new NativeArray<Vector3Int>(CHUNK_DATA_LENGTH, Allocator.Persistent);
         surfaceStrides = new NativeArray<int>(CHUNK_DATA_LENGTH, Allocator.Persistent);
         strideToIndex = new NativeArray<int>(CHUNK_DATA_LENGTH, Allocator.Persistent);
@@ -118,15 +118,14 @@ public class NaiveSurfaceNetsJobified : MonoBehaviour
     private void CompleteJob()
     {
         jobHandle.Complete();
-        
-        MakeAllQuads(job.counts[1], ref sdf, ref job.surfacePoints, ref job.surfaceStrides, ref job.strideToIndex, ref job.positions, indices, job.min, job.max);
-        GenerateMesh(job.counts[0], ref job.positions, indices, ref job.normals);
+
+        int numIndices = 0;
+        MakeAllQuads(job.counts[1], ref sdf, ref job.surfacePoints, ref job.surfaceStrides, ref job.strideToIndex, ref job.positions, ref indices, ref numIndices, job.min, job.max);
+        GenerateMesh(job.counts[0], ref job.positions, numIndices, ref indices, ref job.normals);
     }
 
     private void BeginJob()
     {
-        indices.Clear();
-
         job = new NaiveSurfaceNetsJob();
         job.sdf = sdf;
         job.positions = positions;
@@ -220,7 +219,7 @@ public class NaiveSurfaceNetsJobified : MonoBehaviour
         }
     }
 
-    private void MakeAllQuads(int numSurfacePoints, ref NativeArray<float> sdf, ref NativeArray<Vector3Int> surfacePoints, ref NativeArray<int> surfaceStrides, ref NativeArray<int> strideToIndex, ref NativeArray<Vector3> positions, List<int> indices, Vector3Int min, Vector3Int max)
+    private void MakeAllQuads(int numSurfacePoints, ref NativeArray<float> sdf, ref NativeArray<Vector3Int> surfacePoints, ref NativeArray<int> surfaceStrides, ref NativeArray<int> strideToIndex, ref NativeArray<Vector3> positions, ref NativeArray<int> indices, ref int numIndices, Vector3Int min, Vector3Int max)
     {
         for (int i = 0; i < numSurfacePoints; ++i)
         {
@@ -236,7 +235,8 @@ public class NaiveSurfaceNetsJobified : MonoBehaviour
                     p_stride + LINEARIZED_XYZ_STRIDES[0],
                     LINEARIZED_XYZ_STRIDES[1],
                     LINEARIZED_XYZ_STRIDES[2],
-                    indices);
+                    ref indices,
+                    ref numIndices);
             }
 
             if (surfacePoint.x != min.x && surfacePoint.z != min.z && surfacePoint.y != max.y - 1)
@@ -248,7 +248,8 @@ public class NaiveSurfaceNetsJobified : MonoBehaviour
                     p_stride + LINEARIZED_XYZ_STRIDES[1],
                     LINEARIZED_XYZ_STRIDES[2],
                     LINEARIZED_XYZ_STRIDES[0],
-                    indices);
+                    ref indices,
+                    ref numIndices);
             }
 
             if (surfacePoint.x != min.x && surfacePoint.y != min.y && surfacePoint.z != max.z - 1)
@@ -260,12 +261,13 @@ public class NaiveSurfaceNetsJobified : MonoBehaviour
                     p_stride + LINEARIZED_XYZ_STRIDES[2],
                     LINEARIZED_XYZ_STRIDES[0],
                     LINEARIZED_XYZ_STRIDES[1],
-                    indices);
+                    ref indices,
+                    ref numIndices);
             }
         }
     }
 
-    private void MaybeMakeQuad(ref NativeArray<float> sdf, ref NativeArray<int> strideToIndex, ref NativeArray<Vector3> positions, int p1, int p2, int axis_b_stride, int axis_c_stride, List<int> indices)
+    private void MaybeMakeQuad(ref NativeArray<float> sdf, ref NativeArray<int> strideToIndex, ref NativeArray<Vector3> positions, int p1, int p2, int axis_b_stride, int axis_c_stride, ref NativeArray<int> indices, ref int numIndices)
     {
         float d1 = sdf[p1];
         float d2 = sdf[p2];
@@ -285,61 +287,63 @@ public class NaiveSurfaceNetsJobified : MonoBehaviour
             if (negativeFace)
             {
                 // [v1, v4, v2, v1, v3, v4]
-                indices.Add(v1);
-                indices.Add(v4);
-                indices.Add(v2);
+                indices[numIndices++] = v1;
+                indices[numIndices++] = v4;
+                indices[numIndices++] = v2;
 
-                indices.Add(v1);
-                indices.Add(v3);
-                indices.Add(v4);
+                indices[numIndices++] = v1;
+                indices[numIndices++] = v3;
+                indices[numIndices++] = v4;
             }
             else
             {
                 // [v1, v2, v4, v1, v4, v3]
-                indices.Add(v1);
-                indices.Add(v2);
-                indices.Add(v4);
+                indices[numIndices++] = v1;
+                indices[numIndices++] = v2;
+                indices[numIndices++] = v4;
 
-                indices.Add(v1);
-                indices.Add(v4);
-                indices.Add(v3);
+                indices[numIndices++] = v1;
+                indices[numIndices++] = v4;
+                indices[numIndices++] = v3;
             }
         }
         else if (negativeFace)
         {
             // [v2, v3, v4, v2, v1, v3]
-            indices.Add(v2);
-            indices.Add(v3);
-            indices.Add(v4);
+            indices[numIndices++] = v2;
+            indices[numIndices++] = v3;
+            indices[numIndices++] = v4;
 
-            indices.Add(v2);
-            indices.Add(v1);
-            indices.Add(v3);
+            indices[numIndices++] = v2;
+            indices[numIndices++] = v1;
+            indices[numIndices++] = v3;
         }
         else
         {
             // [v2, v4, v3, v2, v3, v1]
-            indices.Add(v2);
-            indices.Add(v4);
-            indices.Add(v3);
+            indices[numIndices++] = v2;
+            indices[numIndices++] = v4;
+            indices[numIndices++] = v3;
 
-            indices.Add(v2);
-            indices.Add(v3);
-            indices.Add(v1);
+            indices[numIndices++] = v2;
+            indices[numIndices++] = v3;
+            indices[numIndices++] = v1;
         }
     }
 
-    private void GenerateMesh(int numPositions, ref NativeArray<Vector3> positions, List<int> indices, ref NativeArray<Vector3> normals)
+    private void GenerateMesh(int numPositions, ref NativeArray<Vector3> positions, int numIndices, ref NativeArray<int> indices, ref NativeArray<Vector3> normals)
     {
         Vector3[] verticesCpy = new Vector3[numPositions];
         Vector3[] normalsCpy = new Vector3[numPositions];
+        int[] indicesCpy = new int[numIndices];
         NativeArray<Vector3>.Copy(positions, verticesCpy, numPositions);
         NativeArray<Vector3>.Copy(normals, normalsCpy, numPositions);
+        NativeArray<int>.Copy(indices, indicesCpy, numIndices);
 
         Mesh mesh = new Mesh();
         mesh.vertices = verticesCpy;
         NativeArray<Vector3>.Copy(positions, mesh.vertices, numPositions);
-        mesh.SetIndices(indices.ToArray(), MeshTopology.Triangles, 0);
+        mesh.SetIndices(indicesCpy, MeshTopology.Triangles, 0);
         mesh.normals = normalsCpy;
         mesh.UploadMeshData(false);
         mesh.RecalculateBounds();
