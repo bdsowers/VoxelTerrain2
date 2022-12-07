@@ -5,6 +5,7 @@ using UnityEngine.Profiling;
 using Unity.Jobs;
 using Unity.Burst;
 using Unity.Collections;
+using UnityEngine.Rendering;
 
 public struct MeshGenerationJob : IJob
 {
@@ -17,9 +18,12 @@ public struct MeshGenerationJob : IJob
     [ReadOnly] public Vector3Int min;
     [ReadOnly] public Vector3Int max;
     [ReadOnly] public NativeArray<Vector3> positions;
+    [ReadOnly] public NativeArray<Vector3> normals;
 
-    [WriteOnly] public NativeArray<int> indices;
-    [WriteOnly] public NativeArray<int> numIndices;
+    public NativeArray<int> indices;
+    public NativeArray<int> numIndices;
+
+    public Mesh.MeshDataArray meshDataArray;
 
     private int indicesCounter;
 
@@ -27,6 +31,24 @@ public struct MeshGenerationJob : IJob
     {
         MakeAllQuads();
         numIndices[0] = indicesCounter;
+
+        var meshData = meshDataArray[0];
+
+        meshData.SetVertexBufferParams(counts[0], new VertexAttributeDescriptor(VertexAttribute.Position, stream: 0),
+            new VertexAttributeDescriptor(VertexAttribute.Normal, stream: 1));
+        meshData.SetIndexBufferParams(indicesCounter, IndexFormat.UInt32);
+
+        var positionsWrite = meshData.GetVertexData<Vector3>(0);
+        NativeArray<Vector3>.Copy(positions, positionsWrite, counts[0]);
+
+        var normalsWrite = meshData.GetVertexData<Vector3>(1);
+        NativeArray<Vector3>.Copy(normals, normalsWrite, counts[0]);
+
+        var indicesWrite = meshData.GetIndexData<int>();
+        NativeArray<int>.Copy(indices, indicesWrite, indicesCounter);
+
+        meshData.subMeshCount = 1;
+        meshData.SetSubMesh(0, new SubMeshDescriptor(0, indicesCounter));
     }
 
     private void MakeAllQuads()
@@ -132,6 +154,9 @@ public struct MeshGenerationJob : IJob
 
     private void GenerateMesh(int numPositions, ref NativeArray<Vector3> positions, int numIndices, ref NativeArray<int> indices, ref NativeArray<Vector3> normals)
     {
+        var meshDataArray = Mesh.AllocateWritableMeshData(1);
+        var array = meshDataArray[0];
+
         /*
         Vector3[] verticesCpy = new Vector3[numPositions];
         Vector3[] normalsCpy = new Vector3[numPositions];

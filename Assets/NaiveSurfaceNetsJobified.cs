@@ -5,6 +5,7 @@ using UnityEngine.Profiling;
 using Unity.Jobs;
 using Unity.Burst;
 using Unity.Collections;
+using UnityEngine.Rendering;
 
 public class NaiveSurfaceNetsJobified : MonoBehaviour
 {
@@ -114,21 +115,27 @@ public class NaiveSurfaceNetsJobified : MonoBehaviour
         Debug.Log("We should see something now...");
     }
 
+    private bool isJobComplete = false;
+
     private void CompleteJob()
     {
+        if (isJobComplete) return;
+
         jobHandle.Complete();
 
-        /*
-        int numIndices = 0;
-        MakeAllQuads(surfaceDetectionJob.counts[1], ref sdf, ref surfaceDetectionJob.surfacePoints, ref surfaceDetectionJob.surfaceStrides, ref surfaceDetectionJob.strideToIndex, ref surfaceDetectionJob.positions, ref indices, ref numIndices, surfaceDetectionJob.min, surfaceDetectionJob.max);
-        GenerateMesh(surfaceDetectionJob.counts[0], ref surfaceDetectionJob.positions, numIndices, ref indices, ref surfaceDetectionJob.normals);*/
+        Mesh mesh = new Mesh();
+        Mesh.ApplyAndDisposeWritableMeshData(meshGenerationJob.meshDataArray, mesh);
+        mesh.RecalculateBounds();
+        GetComponent<MeshFilter>().mesh = mesh;
+        GetComponent<MeshCollider>().sharedMesh = mesh;
 
-        Debug.Log(meshGenerationJob.numIndices[0]);
-        GenerateMesh(surfaceDetectionJob.counts[0], ref surfaceDetectionJob.positions, meshGenerationJob.numIndices[0], ref meshGenerationJob.indices, ref surfaceDetectionJob.normals);
+        isJobComplete = true;
     }
 
     private void BeginJob()
     {
+        isJobComplete = false;
+
         surfaceDetectionJob = new NaiveSurfaceNetsJob();
         surfaceDetectionJob.sdf = sdf;
         surfaceDetectionJob.positions = positions;
@@ -159,7 +166,11 @@ public class NaiveSurfaceNetsJobified : MonoBehaviour
         meshGenerationJob.counts = counts;
         meshGenerationJob.LINEARIZED_XYZ_STRIDES = LINEARIZED_XYZ_STRIDES;
         meshGenerationJob.numIndices = numIndicies;
-        
+        meshGenerationJob.normals = normals;
+
+        var meshDataArray = Mesh.AllocateWritableMeshData(1);
+        meshGenerationJob.meshDataArray = meshDataArray;
+
         var surfaceDetectionJobHandle = surfaceDetectionJob.Schedule();
         jobHandle = meshGenerationJob.Schedule(surfaceDetectionJobHandle);
     }
@@ -348,7 +359,7 @@ public class NaiveSurfaceNetsJobified : MonoBehaviour
         }
     }
 
-    private void GenerateMesh(int numPositions, ref NativeArray<Vector3> positions, int numIndices, ref NativeArray<int> indices, ref NativeArray<Vector3> normals)
+    /*private void GenerateMesh(int numPositions, ref NativeArray<Vector3> positions, int numIndices, ref NativeArray<int> indices, ref NativeArray<Vector3> normals)
     {
         Vector3[] verticesCpy = new Vector3[numPositions];
         Vector3[] normalsCpy = new Vector3[numPositions];
@@ -367,7 +378,7 @@ public class NaiveSurfaceNetsJobified : MonoBehaviour
 
         GetComponent<MeshFilter>().mesh = mesh;
         GetComponent<MeshCollider>().sharedMesh = mesh;
-    }
+    }*/
 
     
 }
