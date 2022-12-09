@@ -185,6 +185,13 @@ public class NaiveSurfaceNetsJobified : MonoBehaviour
                 StartCoroutine(AnimateBlobGrow(hitInfo.point, Input.GetMouseButtonDown(1)));
             }
         }
+
+        if (isSDFDirty && !isJobRunning)
+        {
+            isSDFDirty = false;
+
+            StartCoroutine(RunFullJob());
+        }
     }
 
     private int Linearize(int x, int y, int z)
@@ -192,18 +199,28 @@ public class NaiveSurfaceNetsJobified : MonoBehaviour
         return x + y * CELL_SIZE.y + z * CELL_SIZE.x * CELL_SIZE.y;
     }
 
+    private bool isSDFDirty = false;
+    private bool isJobRunning = false;
+
+    private IEnumerator RunFullJob()
+    {
+        isJobRunning = true;
+
+        BeginJob();
+        while (!jobHandle.IsCompleted) yield return null;
+        CompleteJob();
+
+        isJobRunning = false;
+    }
     private IEnumerator AnimateBlobGrow(Vector3 pos, bool subtract)
     {
         Vector3Int posInt = new Vector3Int(Mathf.CeilToInt(pos.x), Mathf.CeilToInt(pos.y), Mathf.CeilToInt(pos.z));
         for (float i = 1.0f; i <= 5f; i += Time.deltaTime * 15f)
         {
-            if (!jobHandle.IsCompleted) yield return null;
-
-            CompleteJob();
-
+            if (!isJobRunning)
             RenderSphereIntoChunk(posInt, i, ref sdf, subtract);
 
-            BeginJob();
+            isSDFDirty = true;
 
             yield return null;
         }
