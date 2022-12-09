@@ -9,7 +9,7 @@ using UnityEngine.Rendering;
 
 public class NaiveSurfaceNetsJobified : MonoBehaviour
 {
-    public readonly static int CHUNK_SIZE = 64;
+    public readonly static int CHUNK_SIZE = 128;
     public readonly static int CHUNK_DATA_LENGTH = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE;
     public readonly static Vector3Int CELL_SIZE = new Vector3Int(CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE);
 
@@ -112,14 +112,14 @@ public class NaiveSurfaceNetsJobified : MonoBehaviour
         SCGDeformations.RenderCubeIntoChunk(new Vector3Int(CELL_SIZE.x / 2, 2, CELL_SIZE.z / 2), CELL_SIZE, new Vector3(CELL_SIZE.x, 3, CELL_SIZE.z), ref sdf, ref dirty);
 
         BeginJob();
-        CompleteJob();
+        CompleteJob(true);
 
         Debug.Log("We should see something now...");
     }
 
     private bool isJobComplete = false;
 
-    private void CompleteJob()
+    private void CompleteJob(bool assignPhysicsMesh)
     {
         if (isJobComplete) return;
 
@@ -129,7 +129,11 @@ public class NaiveSurfaceNetsJobified : MonoBehaviour
         Mesh.ApplyAndDisposeWritableMeshData(meshGenerationJob.meshDataArray, mesh);
         mesh.RecalculateBounds();
         GetComponent<MeshFilter>().mesh = mesh;
-        GetComponent<MeshCollider>().sharedMesh = mesh;
+
+        if (assignPhysicsMesh)
+        {
+            GetComponent<MeshCollider>().sharedMesh = mesh;
+        }
 
         isJobComplete = true;
     }
@@ -210,7 +214,19 @@ public class NaiveSurfaceNetsJobified : MonoBehaviour
 
         BeginJob();
         while (!jobHandle.IsCompleted) yield return null;
-        CompleteJob();
+        CompleteJob(false);
+
+        BakePhysicsMeshJob physicsJob = new BakePhysicsMeshJob();
+        Mesh mesh = GetComponent<MeshFilter>().mesh;
+        int instanceId = mesh.GetInstanceID();
+        Debug.Log(instanceId);
+        physicsJob.meshId = instanceId;
+        var physJobHandle = physicsJob.Schedule();
+
+        while (!physJobHandle.IsCompleted) yield return null;
+        physJobHandle.Complete();
+
+        GetComponent<MeshCollider>().sharedMesh = mesh;
 
         isJobRunning = false;
     }
