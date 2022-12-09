@@ -9,7 +9,7 @@ using UnityEngine.Rendering;
 
 public class NaiveSurfaceNetsJobified : MonoBehaviour
 {
-    public readonly static int CHUNK_SIZE = 64;
+    public readonly static int CHUNK_SIZE = 128;
     public readonly static int CHUNK_DATA_LENGTH = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE;
     public readonly static Vector3Int CELL_SIZE = new Vector3Int(CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE);
 
