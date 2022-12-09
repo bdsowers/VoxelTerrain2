@@ -9,7 +9,7 @@ using UnityEngine.Rendering;
 
 public class NaiveSurfaceNetsJobified : MonoBehaviour
 {
-    public readonly static int CHUNK_SIZE = 128;
+    public readonly static int CHUNK_SIZE = 64;
     public readonly static int CHUNK_DATA_LENGTH = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE;
     public readonly static Vector3Int CELL_SIZE = new Vector3Int(CHUNK_SIZE, CHUNK_SIZE, CHUNK_SIZE);
 
@@ -106,8 +106,10 @@ public class NaiveSurfaceNetsJobified : MonoBehaviour
             dirty[i] = true;
         }
 
-        RenderSphereIntoChunk(new Vector3Int(25, 25, 25), 10f, ref sdf, false);
-        RenderSphereIntoChunk(new Vector3Int(35, 25, 25), 10f, ref sdf, false);
+        //SCGDeformations.RenderSphereIntoChunk(new Vector3Int(25, 25, 25), CELL_SIZE, 10f, ref sdf, ref dirty, false);
+        //SCGDeformations.RenderSphereIntoChunk(new Vector3Int(35, 25, 25), CELL_SIZE, 10f, ref sdf, ref dirty, false);
+
+        SCGDeformations.RenderCubeIntoChunk(new Vector3Int(CELL_SIZE.x / 2, 2, CELL_SIZE.z / 2), CELL_SIZE, new Vector3(CELL_SIZE.x, 3, CELL_SIZE.z), ref sdf, ref dirty);
 
         BeginJob();
         CompleteJob();
@@ -218,49 +220,13 @@ public class NaiveSurfaceNetsJobified : MonoBehaviour
         for (float i = 1.0f; i <= 5f; i += Time.deltaTime * 15f)
         {
             if (!isJobRunning)
-            RenderSphereIntoChunk(posInt, i, ref sdf, subtract);
+            {
+                SCGDeformations.RenderSphereIntoChunk(posInt, CELL_SIZE, i, ref sdf, ref dirty, subtract);
+            }
 
             isSDFDirty = true;
 
             yield return null;
-        }
-    }
-
-    void RenderSphereIntoChunk(Vector3Int center, float radius, ref NativeArray<float> sdf, bool subtract)
-    {
-        Vector3 min = center - Vector3.one * (radius + 1);
-        Vector3 max = center + Vector3.one * (radius + 1);
-        Vector3Int minInt = new Vector3Int(Mathf.FloorToInt(min.x), Mathf.FloorToInt(min.y), Mathf.FloorToInt(min.z));
-        Vector3Int maxInt = new Vector3Int(Mathf.CeilToInt(max.x), Mathf.CeilToInt(max.y), Mathf.CeilToInt(max.z));
-
-        minInt.x = Mathf.Max(minInt.x, 1);
-        minInt.y = Mathf.Max(minInt.y, 1);
-        minInt.z = Mathf.Max(minInt.z, 1);
-
-        maxInt.x = Mathf.Min(maxInt.x, CELL_SIZE.x - 1);
-        maxInt.y = Mathf.Min(maxInt.y, CELL_SIZE.y - 1);
-        maxInt.z = Mathf.Min(maxInt.z, CELL_SIZE.z - 1);
-
-        for (int x = minInt.x; x < maxInt.x; x++)
-        {
-            for (int y = minInt.y; y < maxInt.y; y++)
-            {
-                for (int z = minInt.z; z < maxInt.z; z++)
-                {
-                    Vector3 pos = new Vector3(x, y, z);
-                    float val = Vector3.Distance(pos, center) - radius;
-
-                    int lin = x + y * CELL_SIZE.y + z * CELL_SIZE.x * CELL_SIZE.y;
-                    float curr = sdf[lin];
-
-                    if (subtract)
-                        sdf[lin] = Mathf.Max(-val, curr);
-                    else
-                        sdf[lin] = Mathf.Min(curr, val);
-
-                    dirty[lin] = true;
-                }
-            }
         }
     }
 
