@@ -132,14 +132,14 @@ public class NaiveSurfaceNetsJobified : MonoBehaviour
         SCGDeformations.RenderCubeIntoChunk(new Vector3Int(CELL_SIZE.x / 2, 2, CELL_SIZE.z / 2), CELL_SIZE, new Vector3(CELL_SIZE.x, 3, CELL_SIZE.z), ref sdf, ref dirty);
 
         BeginJob();
-        CompleteJob();
+        CompleteJob(true);
 
         Debug.Log("We should see something now...");
     }
 
     private bool isJobComplete = false;
 
-    private void CompleteJob()
+    private void CompleteJob(bool assignMeshCollider)
     {
         if (isJobComplete) return;
 
@@ -149,7 +149,11 @@ public class NaiveSurfaceNetsJobified : MonoBehaviour
         Mesh.ApplyAndDisposeWritableMeshData(meshGenerationJob.meshDataArray, mesh);
         mesh.RecalculateBounds();
         GetComponent<MeshFilter>().mesh = mesh;
-        GetComponent<MeshCollider>().sharedMesh = mesh;
+
+        if (assignMeshCollider)
+        {
+            GetComponent<MeshCollider>().sharedMesh = mesh;
+        }
 
         isJobComplete = true;
     }
@@ -230,7 +234,19 @@ public class NaiveSurfaceNetsJobified : MonoBehaviour
 
         BeginJob();
         while (!jobHandle.IsCompleted) yield return null;
-        CompleteJob();
+        CompleteJob(false);
+
+        Mesh mesh = GetComponent<MeshFilter>().mesh;
+        int meshInstanceId = mesh.GetInstanceID();
+
+        BakeMeshColliderJob bakeColliderJob = new BakeMeshColliderJob();
+        bakeColliderJob.meshId = meshInstanceId;
+        var bakeColliderJobHandle = bakeColliderJob.Schedule();
+
+        while (!bakeColliderJobHandle.IsCompleted) yield return null;
+        bakeColliderJobHandle.Complete();
+
+        GetComponent<MeshCollider>().sharedMesh = mesh;
 
         isJobRunning = false;
     }
