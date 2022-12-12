@@ -74,6 +74,26 @@ public class NaiveSurfaceNetsJobified : MonoBehaviour
     MeshGenerationJob meshGenerationJob;
     JobHandle jobHandle;
 
+    private void OnDestroy()
+    {
+        LINEARIZED_XYZ_STRIDES.Dispose();
+        sdf.Dispose();
+        positions.Dispose();
+        normals.Dispose();
+        dirty.Dispose();
+        cachedOnSurface.Dispose();
+        indices.Dispose();
+        numIndicies.Dispose();
+        surfacePoints.Dispose();
+        surfaceStrides.Dispose();
+        strideToIndex.Dispose();
+        counts.Dispose();
+        cornerDists.Dispose();
+        CUBE_CORNERS_NATIVE.Dispose();
+        CUBE_CORNER_VECTORS_NATIVE.Dispose();
+        CUBE_EDGES_NATIVE.Dispose();
+    }
+
     public void Start()
     {
         LINEARIZED_XYZ_STRIDES = new NativeArray<int>(3, Allocator.Persistent);
@@ -221,7 +241,8 @@ public class NaiveSurfaceNetsJobified : MonoBehaviour
         {
             if (!isJobRunning)
             {
-                SCGDeformations.RenderSphereIntoChunk(posInt, CELL_SIZE, i, ref sdf, ref dirty, subtract);
+                SCGDeformations.RenderCubeIntoChunk(posInt, CELL_SIZE, Vector3.one * i, ref sdf, ref dirty);
+                //SCGDeformations.RenderSphereIntoChunk(posInt, CELL_SIZE, i, ref sdf, ref dirty, subtract);
             }
 
             isSDFDirty = true;
