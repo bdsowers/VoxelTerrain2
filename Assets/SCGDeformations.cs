@@ -6,7 +6,7 @@ using Unity.Collections;
 
 public static class SCGDeformations
 {
-    public static void RenderSphereIntoChunk(Vector3Int center, Vector3Int CELL_SIZE, float radius, ref NativeArray<float> sdf, ref NativeArray<bool> dirty, bool subtract)
+    public static void RenderSphereIntoChunk(Vector3Int center, Vector3Int CELL_SIZE, float radius, ref NativeArray<float> sdf, ref NativeArray<bool> dirty, SCGOperation op)
     {
         Profiler.BeginSample("Rendering sphere into chunk");
 
@@ -35,7 +35,7 @@ public static class SCGDeformations
                     int lin = x + y * CELL_SIZE.y + z * CELL_SIZE.x * CELL_SIZE.y;
                     float curr = sdf[lin];
 
-                    if (subtract)
+                    if (op == SCGOperation.Subtract)
                         sdf[lin] = Mathf.Max(-val, curr);
                     else
                         sdf[lin] = Mathf.Min(curr, val);
@@ -48,8 +48,10 @@ public static class SCGDeformations
         Profiler.EndSample();
     }
 
-    public static void RenderCubeIntoChunk(Vector3Int center, Vector3Int CELL_SIZE, Vector3 size, ref NativeArray<float> sdf, ref NativeArray<bool> dirty)
+    public static void RenderCubeIntoChunk(Vector3Int center, Vector3Int CELL_SIZE, Vector3 size, ref NativeArray<float> sdf, ref NativeArray<bool> dirty, SCGOperation op)
     {
+        Profiler.BeginSample("RenderCubeIntoChunk");
+
         Vector3 min = center - size / 1.5f;
         Vector3 max = center + size / 1.5f;
         Vector3Int minInt = new Vector3Int(Mathf.FloorToInt(min.x), Mathf.FloorToInt(min.y), Mathf.FloorToInt(min.z));
@@ -76,11 +78,29 @@ public static class SCGDeformations
 
                     int lin = x + y * CELL_SIZE.x + z * CELL_SIZE.x * CELL_SIZE.y;
                     float curr = sdf[lin];
-                    sdf[lin] = Mathf.Min(curr, val);
+
+                    if (op == SCGOperation.Subtract)
+                        sdf[lin] = Mathf.Max(-val, curr);
+                    else
+                        sdf[lin] = Mathf.Min(curr, val);
 
                     dirty[lin] = true;
                 }
             }
         }
+
+        Profiler.EndSample();
     }
+}
+
+public enum SCGOperation
+{
+    Add,
+    Subtract,
+}
+
+public enum SCGShape
+{
+    Sphere,
+    Cube,
 }

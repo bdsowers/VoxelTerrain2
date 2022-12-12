@@ -74,6 +74,8 @@ public class NaiveSurfaceNetsJobified : MonoBehaviour
     MeshGenerationJob meshGenerationJob;
     JobHandle jobHandle;
 
+    private SCGShape currentShape = SCGShape.Sphere;
+
     private void OnDestroy()
     {
         LINEARIZED_XYZ_STRIDES.Dispose();
@@ -129,7 +131,7 @@ public class NaiveSurfaceNetsJobified : MonoBehaviour
         //SCGDeformations.RenderSphereIntoChunk(new Vector3Int(25, 25, 25), CELL_SIZE, 10f, ref sdf, ref dirty, false);
         //SCGDeformations.RenderSphereIntoChunk(new Vector3Int(35, 25, 25), CELL_SIZE, 10f, ref sdf, ref dirty, false);
 
-        SCGDeformations.RenderCubeIntoChunk(new Vector3Int(CELL_SIZE.x / 2, 2, CELL_SIZE.z / 2), CELL_SIZE, new Vector3(CELL_SIZE.x, 3, CELL_SIZE.z), ref sdf, ref dirty);
+        SCGDeformations.RenderCubeIntoChunk(new Vector3Int(CELL_SIZE.x / 2, 2, CELL_SIZE.z / 2), CELL_SIZE, new Vector3(CELL_SIZE.x, 3, CELL_SIZE.z), ref sdf, ref dirty, SCGOperation.Add);
 
         BeginJob();
         CompleteJob(true);
@@ -203,12 +205,22 @@ public class NaiveSurfaceNetsJobified : MonoBehaviour
 
     private void Update()
     {
+        if (Input.GetKeyDown(KeyCode.S))
+        {
+            currentShape = SCGShape.Sphere;
+        }
+        
+        if (Input.GetKeyDown(KeyCode.C))
+        {
+            currentShape = SCGShape.Cube;
+        }
+
         if (Input.GetMouseButtonDown(0) || Input.GetMouseButtonDown(1))
         {
             Ray ray = Camera.main.ScreenPointToRay(Input.mousePosition);
             if (Physics.Raycast(ray, out RaycastHit hitInfo, float.MaxValue))
             {
-                StartCoroutine(AnimateBlobGrow(hitInfo.point, Input.GetMouseButtonDown(1)));
+                StartCoroutine(AnimateBlobGrow(hitInfo.point, Input.GetMouseButtonDown(1) ? SCGOperation.Subtract : SCGOperation.Add));
             }
         }
 
@@ -250,15 +262,21 @@ public class NaiveSurfaceNetsJobified : MonoBehaviour
 
         isJobRunning = false;
     }
-    private IEnumerator AnimateBlobGrow(Vector3 pos, bool subtract)
+    private IEnumerator AnimateBlobGrow(Vector3 pos, SCGOperation op)
     {
         Vector3Int posInt = new Vector3Int(Mathf.CeilToInt(pos.x), Mathf.CeilToInt(pos.y), Mathf.CeilToInt(pos.z));
         for (float i = 1.0f; i <= 5f; i += Time.deltaTime * 15f)
         {
             if (!isJobRunning)
             {
-                SCGDeformations.RenderCubeIntoChunk(posInt, CELL_SIZE, Vector3.one * i, ref sdf, ref dirty);
-                //SCGDeformations.RenderSphereIntoChunk(posInt, CELL_SIZE, i, ref sdf, ref dirty, subtract);
+                if (currentShape == SCGShape.Cube)
+                {
+                    SCGDeformations.RenderCubeIntoChunk(posInt, CELL_SIZE, Vector3.one * i, ref sdf, ref dirty, op);
+                }
+                else if (currentShape == SCGShape.Sphere)
+                {
+                    SCGDeformations.RenderSphereIntoChunk(posInt, CELL_SIZE, i, ref sdf, ref dirty, op);
+                }
             }
 
             isSDFDirty = true;
